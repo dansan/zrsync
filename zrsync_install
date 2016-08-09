@@ -1,0 +1,94 @@
+#!/bin/bash
+
+GITHUB="https://github.com/dansan/zrsync"
+ZRSYNC_DIR="$HOME/.zrsync/zrsync"
+VIRTENV_DIR="$HOME/.zrsync/virtenv"
+SCRIPT_DIR="$HOME/bin"
+
+DISTRO=$(lsb_release -is)
+
+if [ "$DISTRO" = "Debian" ]; then
+	PACKAGES="git python-virtualenv librsync1 libzmq-dev"
+	INST_EXE=/usr/bin/apt-get
+	INST_CMD=install
+elif [ "$DISTRO" = "Univention" ]; then
+	PACKAGES="git python-virtualenv librsync1 libzmq-dev"
+	INST_EXE=/usr/sbin/univention-install
+	INST_CMD=""
+else
+	echo "Don't know distribution, exiting."
+	exit 1
+fi
+
+if ! [ -x "$INST_EXE" ]; then
+	echo "Cannot find or run package manager \"$INST_EXE\", exiting."
+	exit 1
+fi
+
+echo "Checking package dependencies..."
+declare -a INST_PCK=()
+if [ "$DISTRO" = "Debian" -o "$DISTRO" = "Univention" ]; then
+	# use "dpkg-query -l" to check installation state
+	for PCK in ${PACKAGES}; do
+		if ! dpkg-query -l ${PCK} >/dev/null 2>&1; then
+			INST_PCK+=(${PCK})
+		fi
+	done
+fi
+
+if [ -n "$INST_PCK" ]; then
+	if [ "$UID" = "0" ]; then
+		DO_SUDO=""
+	else
+		echo "You are not root, trying with sudo..."
+		DO_SUDO="sudo"
+	fi
+	echo "Running $DO_SUDO $INST_EXE $INST_CMD ${INST_PCK[@]} ..."
+	${DO_SUDO} ${INST_EXE} ${INST_CMD} ${INST_PCK[@]} || exit 1
+else
+	echo "Nothing to install."
+fi
+
+echo "Cloning $GITHUB to $ZRSYNC_DIR..."
+git clone ${GITHUB} ${ZRSYNC_DIR} || exit 1
+
+echo "Installing Python virtual env in $VIRTENV_DIR..."
+mkdir -pv ${VIRTENV_DIR} || exit 1
+virtualenv ${VIRTENV_DIR} || exit 1
+
+if [ "$DISTRO" = "Univention" ]; then
+	# create symlink python2.7 -> python
+	ln -s python ${VIRTENV_DIR}/bin/python2.7
+fi
+
+source ${VIRTENV_DIR}/bin/activate || exit 1
+
+echo "Updating pip..."
+if [ "$DISTRO" = "Univention" ]; then
+	# ancient pip version
+	pip install -U 'https://pypi.python.org/packages/e7/a8/7556133689add8d1a54c0b14aeff0acb03c64707ce100ecd53934da1aa13/pip-8.1.2.tar.gz#md5=87083c0b9867963b29f7aba3613e8f4a' || exit 1
+fi
+pip install --compile -U pip || exit 1
+
+# python-librsync version in pypi repo is broken
+echo "Installing python-librsync from Github..."
+pip install --compile -U git+https://github.com/smartfile/python-librsync.git || exit 1
+
+echo "Installing remaining requirements..."
+pip install --compile -U -r "$ZRSYNC_DIR/requirements.txt" || exit 1
+
+echo "Creating startup scripts in $SCRIPT_DIR..."
+mkdir -pv "$SCRIPT_DIR"
+cat <<-EOF >"$SCRIPT_DIR/zrsync"
+#!/bin/sh
+exec ${VIRTENV_DIR}/bin/python2.7 ${ZRSYNC_DIR}/zrsync/zrsync.py \$@
+EOF
+cat <<-EOF >"$SCRIPT_DIR/zrsyncd"
+#!/bin/sh
+exec ${VIRTENV_DIR}/bin/python2.7 ${ZRSYNC_DIR}/zrsync/zrsyncd.py \$@
+EOF
+chmod +x "$SCRIPT_DIR/zrsync" "$SCRIPT_DIR/zrsyncd"
+
+echo "Sucessfully installed zrsync in $ZRSYNC_DIR and a Python virtualenv"
+echo "in $VIRTENV_DIR."
+echo "Convenience startup scripts were installed to $SCRIPT_DIR/zrsync and $SCRIPT_DIR/zrsyncd."

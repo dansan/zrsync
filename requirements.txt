@@ -1,0 +1,4 @@
+docopt==0.6.2
+inotify==0.2.7
+python-librsync==0.1.post5
+pyzmq==15.4.0
