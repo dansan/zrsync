@@ -8,7 +8,7 @@ SCRIPT_DIR="$HOME/bin"
 DISTRO=$(lsb_release -is)
 
 if [ "$DISTRO" = "Debian" ]; then
-	PACKAGES="git python-virtualenv librsync1 libzmq-dev"
+	PACKAGES="git virtualenv librsync1 libzmq3-dev"
 	INST_EXE=/usr/bin/apt-get
 	INST_CMD=install
 elif [ "$DISTRO" = "Univention" ]; then
@@ -53,8 +53,13 @@ echo "Cloning $GITHUB to $ZRSYNC_DIR..."
 git clone ${GITHUB} ${ZRSYNC_DIR} || exit 1
 
 echo "Installing Python virtual env in $VIRTENV_DIR..."
+# install from empty dir, cause pip-1.5 crashes on HTML files with umlauts in cwd
+TMP_DIR=$(mktemp -d)
+cd ${TMP_DIR}
 mkdir -pv ${VIRTENV_DIR} || exit 1
 virtualenv ${VIRTENV_DIR} || exit 1
+cd -
+rmdir ${TMP_DIR}
 
 if [ "$DISTRO" = "Univention" ]; then
 	# create symlink python2.7 -> python
