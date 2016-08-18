@@ -4,7 +4,9 @@ ZRsync
 
 Continuously synchronize directories from a client to a server with emphasis on low latency (not on large files).
 
-Uses inotify to monitor directories for changes, librsync to reduce bandwidth usage and zeromq for the transport.
+Permissions and timestamps are also copied, so ``rsync -avn --delete /source /target`` should always result in "nothing to do" (except during synchronization).
+
+Uses inotify to monitor directories for changes, librsync to reduce bandwidth usage and zeromq (+ssh) for the transport.
 
 Development is done using Python 2.7 and ZeroMQ 4.0. It may or may not run with other versions.
 Latest source code can be found `on Github <https://github.com/dansan/zrsync/>`_.
@@ -34,9 +36,40 @@ Running
 .. code-block:: bash
 
     (on target system) $ ~/bin/zrsyncd
-    (on source system) $ ~/bin/zrsync /my/local/dir host:/other/dir
+    (on source system) $ ~/bin/zrsync host /my/local/dir /remote/dir
 
-The order in which client and server are started does not matter. See ``--help`` for more options:
+The order in which client and server are started does not matter.
+
+****
+
+Continuously sync ``~/Documents`` to ``/tmp/mydocs`` on the same system. Zrsyncd must already be running:
+.. code-block:: bash
+
+    $ ~/bin/zrsync localhost ~/Documents /tmp/mydocs
+
+Continuously sync ``~/Documents`` to ``~/Documents`` of user foo on ``my.ser.ver`` using a SSH tunnel:
+.. code-block:: bash
+
+    $ ~/bin/zrsync foo@my.ser.ver ~/Documents Documents
+
+The same, but it try to start *zrsyncd* on ``my.ser.ver``, if it is not yet running and install it if is not already installed. When the client quits, it will shut down *zrsyncd* on the target system:
+.. code-block:: bash
+
+    $ ~/bin/zrsync -a foo@my.ser.ver ~/Documents Documents
+
+Sync ``~/Documents`` to ``~/Documents`` of user foo on ``my.ser.ver`` using a SSH tunnel *once* and then stop zrsync client and server. This is what rsync does:
+.. code-block:: bash
+
+    $ ~/bin/zrsync -it foo@my.ser.ver ~/Documents Documents
+
+Continuously sync three directories, logging in as user foo on my.ser.ver using a SSH: ``~/Documents`` to ``~/Documents``, ``/etc`` to ``/tmp/etc`` and ``~/git`` to ``/tmp/stuff``.
+.. code-block:: bash
+
+    $ ~/bin/zrsync foo@my.ser.ver ~/Documents Documents /etc /tmp/etc ~/git /tmp/stuff
+
+****
+
+ See ``--help`` for more options:
 
 .. code-block:: bash
 
@@ -44,21 +77,26 @@ The order in which client and server are started does not matter. See ``--help``
     zrsync client: continuously synchronize a local directory to a [remote] directory.
 
     Usage:
-      zrsync.py [-hinstqvp PORT] <source-dir> <target> [<source-dir> <target>]...
+      zrsync [-ahilnstqvp PORT] <server> <source-dir> <target-dir> [<source-dir> <target-dir>]...
 
     Arguments:
-      source-dir  local directory to sync
-      target      server and directory to sync to: [[user@]server:]directory ('user@' automatically enables --ssh)
+      server      server to sync to: [user@]server[:port]
+                  ('user@' and ':port' automatically enable --ssh)
+      source-dir  local directory to sync from
+      target      directory on the server to sync to
+                  (not starting with '/' means relative to home of user running zrsyncd)
 
     Options:
+      -a --auto              enable -lrt (--install, --start and --shutdown)
       -h --help              show this help message and exit
-      -i --initial-only      only make the inital sync
-      -p PORT --port=PORT    port to connect to [default: 24240]
+      -i --initial-only      quit after the initial sync
+      -l --install           try to install zrsync on target (implies --ssh)
       -n --no-delete         do not delete any files or diretories on the target
-      -s --ssh               tunnel connection through SSH. Assumes prior setup of password-less SSH login.
-      -l --install           try to install zrsync on target. Automatically enables --ssh.
-      -t --shutdown          shutdown server when finished
+      -p PORT --port=PORT    zrsyncd (not ssh) port to connect to [default: 24240]
+      -r --start             start server (zrsyncd) on target if not already running (implies --ssh)
       -q --quiet             print only errors
+      -s --ssh               tunnel connection through SSH.
+      -t --shutdown          shutdown server when finished
       -v --verbose           print debug statements
       --version              show version and exit
 
@@ -91,3 +129,4 @@ This software is licensed under GNU General Public License v3, see LICENSE.
 - `python-librsync <https://github.com/smartfile/python-librsync/>`_ is licensed under the terms of the MIT license.
 - `docopt <http://docopt.org/>`_ is licensed under the terms of the MIT license.
 - `pyinotify <https://github.com/dsoprea/PyInotify>`_ is licensed under the terms of the GNU General Public License v2.
+- `pexpect <https://github.com/pexpect/pexpect/>`_ is licensed under the terms of the ISC LICENSE.

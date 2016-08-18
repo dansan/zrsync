@@ -3,29 +3,34 @@
 """zrsync client: continuously synchronize a local directory to a [remote] directory.
 
 Usage:
-  zrsync.py [-hilnstqvp PORT] <source-dir> <target> [<source-dir> <target>]...
+  zrsync [-ahilnrqstvp PORT] <server> <source-dir> <target-dir> [<source-dir> <target-dir>]...
 
 Arguments:
-  source-dir  local directory to sync
-  target      server and directory to sync to: [[user@]server:]directory ('user@' automatically enables --ssh)
+  server      server to sync to: [user@]server[:port]
+              ('user@' and ':port' automatically enable --ssh)
+  source-dir  local directory to sync from
+  target      directory on the server to sync to
+              (not starting with '/' means relative to home of user running zrsyncd)
 
 Options:
+  -a --auto              enable -lrt (--install, --start and --shutdown, implies --ssh)
   -h --help              show this help message and exit
-  -i --initial-only      only make the inital sync
-  -p PORT --port=PORT    port to connect to [default: 24240]
+  -i --initial-only      quit after the initial sync
+  -l --install           try to install zrsync on target (implies --ssh)
   -n --no-delete         do not delete any files or diretories on the target
-  -s --ssh               tunnel connection through SSH. Assumes prior setup of password-less SSH login.
-  -l --install           try to install zrsync on target. Automatically enables --ssh.
-  -t --shutdown          shutdown server when finished
+  -p PORT --port=PORT    zrsyncd (not ssh) port to connect to [default: 24240]
+  -r --start             start server (zrsyncd) on target if not already running (implies --ssh)
   -q --quiet             print only errors
+  -s --ssh               tunnel connection through SSH.
+  -t --shutdown          shutdown server when finished
   -v --verbose           print debug statements
   --version              show version and exit
-
 """
 
 import logging
 import re
 import os
+import pwd
 import signal
 import stat
 import sys
@@ -34,8 +39,8 @@ from multiprocessing import Process
 
 import inotify.adapters
 import inotify.constants
-import librsync
 import zmq
+import zmq.ssh
 from docopt import docopt
 
 from zrsyncd import ZRsyncBase, ZRequest, handle_oserror, setup_logging, MIN_BLOCK_DIFF_SIZE
@@ -46,10 +51,14 @@ HANDLE_EVENTS = ["IN_CLOSE_WRITE", "IN_ATTRIB", "IN_DELETE", "IN_CREATE", "IN_MO
 
 
 class SyncClient(ZRsyncBase):
-    def __init__(self, name, source_dir, server_addr, server_port, target_dir, no_delete, initial_only, log_level):
+    def __init__(self, name, source_dir, server_addr, server_port, target_dir, ssh, no_delete, initial_only, log_level):
         super(SyncClient, self).__init__(name, server_addr, server_port, log_level)
+        _loc = locals()
+        del _loc["self"]
+        self.logger.debug("Creating %s with %r.", self.__class__.__name__, _loc)
         self.source_dir = source_dir
         self.target_dir = target_dir
+        self.ssh = ssh
         self.no_delete = no_delete
         self.initial_only = initial_only
         self._error_tmp = dict()
@@ -58,10 +67,14 @@ class SyncClient(ZRsyncBase):
 
     def do_connect(self):
         self._socket = self._context.socket(zmq.REQ)
-        socket_address = "tcp://{}:{}".format(self.addr, self.port)
-        self.logger.debug("Connecting to %r...", socket_address)
-        self._socket.connect(socket_address)
-        self.logger.info("Connected to %r.", socket_address)
+        if self.ssh:
+            socket_address = "tcp://127.0.0.1:{}".format(self.port)
+            self.logger.info("Connecting to %r using SSH through %r...", socket_address, self.addr)
+            zmq.ssh.tunnel_connection(self._socket, socket_address, self.addr)
+        else:
+            socket_address = "tcp://{}:{}".format(self.addr, self.port)
+            self.logger.info("Connecting to %r...", socket_address)
+            self._socket.connect(socket_address)
 
     def run(self):
         self.init()
@@ -393,91 +406,65 @@ class SyncClient(ZRsyncBase):
 
 
 def validate_args(args):
-    if args["--install"]:
+    if args["--auto"]:
+        args["--install"] = args["--start"] = args["--shutdown"] = True
+
+    if any([args["--install"], args["--start"], "@" in args["<server>"], ":" in args["<server>"]]):
         args["--ssh"] = True
 
-    if args["--ssh"]:
-        print("Sorry - SSH support is not yet implemented.")
-        sys.exit(1)
-
-    try:
-        args["--port"] = int(args["--port"])
-    except ValueError:
-        print("'port' argument must be a number.")
-        sys.exit(1)
-    for adir in args["<source-dir>"]:
-        if not os.path.isdir(adir):
-            print("<source-dir> must be a directory, {} is not.".format(adir))
-            sys.exit(1)
-    args["<source-dir>"] = [os.path.normpath(adir) for adir in args["<source-dir>"]]
-    if len(args["<source-dir>"]) != len(args["<target>"]):
-        print("There must be as many <source-dir> entries as <target> entries.")
-        sys.exit(1)
-
-    args["jobs"] = list()
-    for num, target in enumerate(args["<target>"]):
-        server = directory = user = None
-        if ":" in target:
-            m = re.match(r"(.*?)@(.*?):(.*)", target)
-            if m:
-                user, server, directory = m.groups()
-            else:
-                m = re.match(r"(.*?):(.*)", target)
-                if m:
-                    server, directory = m.groups()
-        else:
-            server = "localhost"
-            directory = target
-        if not server or not directory:
-            print("Cannot understand format of target '{}'. <target> must be [[user@]server:]directory.".format(target))
-            sys.exit(1)
-        for t in args["jobs"]:
-            if t["target_server"] != server:
-                print("All targets must use the same server. '{}' is different from '{}.".format(t["target_server"], server))
-                sys.exit(1)
-        if user:
-            args["--ssh"] = True
-        args["jobs"].append({
-            "source_dir": args["<source-dir>"][num],
-            "target_user": user,
-            "target_server": server,
-            "target_dir": os.path.normpath(directory)
-        })
     if args["--verbose"]:
         args["log_level"] = logging.DEBUG
     elif args["--quiet"]:
         args["log_level"] = logging.ERROR
     else:
         args["log_level"] = logging.INFO
+
+    try:
+        args["--port"] = int(args["--port"])
+    except ValueError:
+        print("'port' argument must be a number.")
+        sys.exit(1)
+
+    if len(args["<source-dir>"]) != len(args["<target-dir>"]):
+        print("There must be as many <source-dir> entries as <target-dir> entries.")
+        sys.exit(1)
+
+    for adir in args["<source-dir>"]:
+        if not os.path.isdir(adir):
+            print("<source-dir> must be a directory, '{}' is not.".format(adir))
+            sys.exit(1)
+    args["<source-dir>"] = [os.path.normpath(adir) for adir in args["<source-dir>"]]
+
     return args
 
 
 def main(args):
     logger = setup_logging(args["log_level"], os.getpid())
 
-    # TODO: support SSH tunneling
     # TODO: support remote client installation
 
     kwargs = dict(
+        server_addr=args["<server>"],
         server_port=args["--port"],
+        ssh=args["--ssh"],
         no_delete=args["--no-delete"],
         initial_only=args["--initial-only"],
         log_level=args["log_level"]
     )
+    jobs = zip(args["<source-dir>"], args["<target-dir>"])
     processes = list()
-    for num, job in enumerate(args["jobs"]):
-        p_name = "zrsync client {}".format(args["<source-dir>"][num])
+    for src, trg in jobs:
+        p_name = "zrsync client {}".format(src)
         kwargs.update(dict(
             name=p_name,
-            source_dir=job["source_dir"],
-            server_addr=job["target_server"],
-            target_dir=job["target_dir"]
+            source_dir=src,
+            target_dir=trg
         ))
         client = SyncClient(**kwargs)
         p = Process(target=client.run, args=(), name=p_name)
         p.start()
         processes.append(p)
-        logger.info("Started sync client %d/%d (PID %d).", num+1, len(processes), p.pid)
+        logger.info("Started sync client %d/%d (PID %d).", len(processes), len(jobs), p.pid)
 
     for count, p in enumerate(processes):
         try:

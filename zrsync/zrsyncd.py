@@ -3,7 +3,7 @@
 """zrsync server: receive continuous updates for a local directory.
 
 Usage:
-  zrsyncd.py [-hqv] [-i IP | --ip=IP] [-p PORT | --port=PORT]
+  zrsyncd [-hqv] [-i IP | --ip=IP] [-p PORT | --port=PORT]
 
 Options:
   -h --help              show this help message and exit
