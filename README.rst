@@ -43,26 +43,31 @@ The order in which client and server are started does not matter.
 ****
 
 Continuously sync ``~/Documents`` to ``/tmp/mydocs`` on the same system. Zrsyncd must already be running:
+
 .. code-block:: bash
 
     $ ~/bin/zrsync localhost ~/Documents /tmp/mydocs
 
 Continuously sync ``~/Documents`` to ``~/Documents`` of user foo on ``my.ser.ver`` using a SSH tunnel:
+
 .. code-block:: bash
 
     $ ~/bin/zrsync foo@my.ser.ver ~/Documents Documents
 
 The same, but it try to start *zrsyncd* on ``my.ser.ver``, if it is not yet running and install it if is not already installed. When the client quits, it will shut down *zrsyncd* on the target system:
+
 .. code-block:: bash
 
     $ ~/bin/zrsync -a foo@my.ser.ver ~/Documents Documents
 
 Sync ``~/Documents`` to ``~/Documents`` of user foo on ``my.ser.ver`` using a SSH tunnel *once* and then stop zrsync client and server. This is what rsync does:
+
 .. code-block:: bash
 
     $ ~/bin/zrsync -it foo@my.ser.ver ~/Documents Documents
 
 Continuously sync three directories, logging in as user foo on my.ser.ver using a SSH: ``~/Documents`` to ``~/Documents``, ``/etc`` to ``/tmp/etc`` and ``~/git`` to ``/tmp/stuff``.
+
 .. code-block:: bash
 
     $ ~/bin/zrsync foo@my.ser.ver ~/Documents Documents /etc /tmp/etc ~/git /tmp/stuff
@@ -121,7 +126,7 @@ Continuously sync three directories, logging in as user foo on my.ser.ver using 
 License
 =======
 
-This software is licensed under GNU General Public License v3, see LICENSE.
+This software is licensed under the terms of the `GNU General Public License v3 <https://www.gnu.org/licenses/gpl-3.0.en.html>`_, see LICENSE.
 
 - `ZeroMQ <http://zeromq.org/>`_ is licensed under the terms of the GNU Lesser General Public License v3.
 - `PyZMQ <https://github.com/zeromq/pyzmq>`_ is licensed under the terms of the Modified BSD License as well as the GNU Lesser General Public License v3.
