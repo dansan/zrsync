@@ -54,7 +54,7 @@ Continuously sync ``~/Documents`` to ``~/Documents`` of user foo on ``my.ser.ver
 
     $ ~/bin/zrsync foo@my.ser.ver ~/Documents Documents
 
-The same, but it try to start *zrsyncd* on ``my.ser.ver``, if it is not yet running and install it if is not already installed. When the client quits, it will shut down *zrsyncd* on the target system:
+The same, but it will try to start *zrsyncd* on ``my.ser.ver``, if it is not yet running and install it if is not already installed. When the client quits, it will shut down *zrsyncd* on the target system:
 
 .. code-block:: bash
 
@@ -74,7 +74,7 @@ Continuously sync three directories, logging in as user foo on my.ser.ver using 
 
 ****
 
- See ``--help`` for more options:
+See ``--help`` for more options:
 
 .. code-block:: bash
 
@@ -110,7 +110,7 @@ Continuously sync three directories, logging in as user foo on my.ser.ver using 
 .. code-block:: bash
 
     $ ~/bin/zrsyncd -h
-    zrsync server: receive continuous updates for a local directory.
+    zrsync server: receive continuous updates for local directories from zrsync.
 
     Usage:
       zrsyncd.py [-hqv] [-i IP | --ip=IP] [-p PORT | --port=PORT]

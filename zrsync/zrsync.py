@@ -30,7 +30,6 @@ Options:
 import logging
 import re
 import os
-import pwd
 import signal
 import stat
 import sys
@@ -43,10 +42,10 @@ import zmq
 import zmq.ssh
 from docopt import docopt
 
-from zrsyncd import ZRsyncBase, ZRequest, handle_oserror, setup_logging, MIN_BLOCK_DIFF_SIZE
+from .zrsyncd import ZRsyncBase, ZRequest, handle_oserror, setup_logging, MIN_BLOCK_DIFF_SIZE
 
 FILE_IGNORE_REGEX = map(re.compile, [r"^$", r".swpx$", r".swp$", r"^\.svn$", r"^\.git.*", r"^\.", r"~$", r"^#.*#$",
-    "\.dch$"])
+    "\.dch$", "___jb_tmp___$", "___jb_old___$"])
 HANDLE_EVENTS = ["IN_CLOSE_WRITE", "IN_ATTRIB", "IN_DELETE", "IN_CREATE", "IN_MOVED_FROM", "IN_MOVED_TO"]
 
 
@@ -232,7 +231,7 @@ class SyncClient(ZRsyncBase):
                 if request["st_size"] == 0:
                     request["cmd"] = "truncate"
                 else:
-                    request.add_full(local_filename).request.add_parent_time(local_filename).add_hash(local_filename)
+                    request.add_full(local_filename).add_parent_time(local_filename).add_hash(local_filename)
             elif "IN_ATTRIB" in action:
                 # prevent unnecessary request by detecting IN_ATTRIB following
                 # IN_CREATE and IN_CLOSE_WRITE without stat change
@@ -371,9 +370,10 @@ class SyncClient(ZRsyncBase):
                     if not any([
                         stat.S_ISDIR(a_file_stat["st_mode"]),
                         stat.S_ISLNK(a_file_stat["st_mode"]),
-                        stat.S_ISREG(a_file_stat["st_mode"])]):
-                            self.logger.debug("File type of %r not supported, ignoring.",  path)
-                            a_file_stat = dict(cmd="ignore", name=target_path)
+                        stat.S_ISREG(a_file_stat["st_mode"])]
+                    ):
+                        self.logger.debug("File type of %r not supported, ignoring.",  path)
+                        a_file_stat = dict(cmd="ignore", name=target_path)
                 res["files"].append(a_file_stat)
             return res
 
@@ -434,6 +434,7 @@ def validate_args(args):
             print("<source-dir> must be a directory, '{}' is not.".format(adir))
             sys.exit(1)
     args["<source-dir>"] = [os.path.normpath(adir) for adir in args["<source-dir>"]]
+    args["<target-dir>"] = [adir.rstrip("/") for adir in args["<target-dir>"]]
 
     return args
 

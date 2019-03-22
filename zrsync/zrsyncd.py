@@ -1,6 +1,6 @@
 #!/usr/bin/env python2.7
 
-"""zrsync server: receive continuous updates for a local directory.
+"""zrsync server: receive continuous updates for local directories from zrsync.
 
 Usage:
   zrsyncd [-hqv] [-i IP | --ip=IP] [-p PORT | --port=PORT]
@@ -497,6 +497,7 @@ class SyncServer(ZRsyncBase):
         if node["cmd"] == "ignore":
             self.logger.info("ignore %r", file_path)
             return dict(cmd="ignore", result="done", name=file_path)
+        warn = []
         try:
             tmp_st = os.lstat(file_path)
         except OSError as exc:
@@ -504,21 +505,18 @@ class SyncServer(ZRsyncBase):
                 self.logger.debug("does not exist: %r", file_path)
                 if stat.S_ISLNK(node["st_mode"]):
                     lnk_target = node["lnk_target"]
-                    os.symlink(lnk_target, file_path)
+                    warn = self.symlink(lnk_target, file_path)
                     # Linux does not support setting the time of symlinks.
-                    self.logger.info("symlink %r", file_path)
-                    return dict(cmd="symlink", result="done", name=file_path)
+                    return dict(cmd="symlink", result="done", name=file_path, warn=warn)
                 elif stat.S_ISDIR(node["st_mode"]):
-                    self.mkdir(file_path, stat.S_IMODE(node["st_mode"]), node["st_uid"], node["st_gid"],
-                               node["st_atime"], node["st_mtime"])
-                    self.logger.info("mkdir %r", file_path)
-                    return dict(cmd="mkdir", result="done", name=file_path)
+                    warn = self.mkdir(file_path, stat.S_IMODE(node["st_mode"]), node["st_uid"], node["st_gid"],
+                                      node["st_atime"], node["st_mtime"])
+                    return dict(cmd="mkdir", result="done", name=file_path, warn=warn)
                 else:
                     self.logger.info("req full %r", file_path)
                     # touch and set safe permissions for now
-                    with open(file_path, "wb") as fp:
-                        os.fchmod(fp.fileno(), stat.S_IRUSR | stat.S_IWUSR)
-                    return dict(cmd="full", name=file_path)
+                    warn = self.create_empty(file_path, stat.S_IRUSR | stat.S_IWUSR, node["st_uid"], node["st_gid"])
+                    return dict(cmd="full", name=file_path, warn=warn)
             raise
         target_st = dict(
             cmd=node["cmd"],
@@ -548,23 +546,19 @@ class SyncServer(ZRsyncBase):
                                 os.remove(file_path)
                             if stat.S_ISLNK(src_st):
                                 lnk_target = node["lnk_target"]
-                                os.symlink(lnk_target, file_path)
+                                warn = self.symlink(lnk_target, file_path)
                                 # Linux does not support setting the time of symlinks.
-                                self.logger.info("symlink %r", file_path)
-                                return dict(cmd="symlink", result="done", name=file_path)
+                                return dict(cmd="symlink", result="done", name=file_path, **warn)
                             else:
                                 self.logger.info("req full %r", file_path)
                                 # touch
-                                with open(file_path, "wb") as fp:
-                                    os.fchmod(fp.fileno(), stat.S_IMODE(src_st))
-                                    os.fchown(fp.fileno(), node["st_uid"], node["st_gid"])
-                                return dict(cmd="full", name=file_path)
+                                warn = self.create_empty(file_path, stat.S_IMODE(src_st), node["st_uid"], node["st_gid"])
+                                return dict(cmd="full", name=file_path, warn=warn)
                         if stat.S_IMODE(src_st) != stat.S_IMODE(dst_st):
                             self.chmod(file_path, stat.S_IMODE(src_st))
                     elif st in ["st_uid", "st_gid"]:
                         if uid_done:
                             continue
-                        self.logger.info("chown %r", file_path)
                         self.chown(file_path, node["st_uid"], node["st_gid"])
                         uid_done = True
                     elif st in ["st_size", "st_mtime"]:
@@ -585,16 +579,16 @@ class SyncServer(ZRsyncBase):
                                 # with 1 ms
                                 os.utime(file_path, (node["st_atime"], node["st_mtime"]))
                                 continue
-                            self.logger.warn("mtime difference is %d microseconds", (src_d - dst_d).microseconds)
+                            self.logger.warning("mtime difference is %d microseconds", (src_d - dst_d).microseconds)
                         if stat.S_ISDIR(node["st_mode"]):
-                            os.utime(file_path, (node["st_atime"], node["st_mtime"]))
+                            warn = self.utime(file_path, node["st_atime"], node["st_mtime"])
                         else:
                             if node["st_size"] == 0:
-                                with open(file_path, "wb") as fp:
-                                    fp.truncate(0)
-                                os.utime(file_path, (node["st_atime"], node["st_mtime"]))
                                 self.logger.info("truncate %r", file_path)
-                                return dict(cmd="truncate", result="done", name=file_path)
+                                with open(file_path, "w") as fp:
+                                    fp.truncate(0)
+                                warn = self.utime(file_path, node["st_atime"], node["st_mtime"])
+                                return dict(cmd="truncate", result="done", name=file_path, warn=warn)
                             elif node["st_blocks"] < MIN_BLOCK_DIFF_SIZE:
                                 # not worth diffing on both ends and patching
                                 self.logger.info("req full %r", file_path)
@@ -612,22 +606,75 @@ class SyncServer(ZRsyncBase):
                 self.logger.exception("Uncaught OSError. node=%r st=%r args=%r errno=%r filename=%r message=%r "
                                       "strerror=%r -> %r", node, st, exc.args, exc.errno, exc.filename, exc.message,
                                       exc.strerror, exc)
-        return dict(cmd="cmp", result="done", name=file_path)
+        return dict(cmd="cmp", result="done", name=file_path, warn=warn)
 
     def chmod(self, name, st_mode):
-        self.logger.debug("chmod(%r, %r)", name, stat.S_IMODE(st_mode))
+        self.logger.debug("chmod %r %r", name, stat.S_IMODE(st_mode))
         chmod = getattr(os, "lchmod", os.chmod)
-        chmod(name, stat.S_IMODE(st_mode))
+        try:
+            chmod(name, stat.S_IMODE(st_mode))
+            return []
+        except OSError as exc:
+            msg = "Could not change permissions of '{}': {}".format(name, exc)
+            self.logger.warning(msg)
+            return [msg]
 
     def chown(self, name, uid, gid):
-        self.logger.debug("chown(%r, %r, %r)", name, uid, gid)
-        os.lchown(name, uid, gid)
+        self.logger.debug("chown %r %r %r", name, uid, gid)
+        try:
+            os.lchown(name, uid, gid)
+            return []
+        except OSError as exc:
+            msg = "Could not change owner/group of '{}': {}".format(name, exc)
+            self.logger.warning(msg)
+            return [msg]
 
     def mkdir(self, dirname, mode, uid, gid, atime, mtime):
-        self.logger.debug("mkdir(%r); chown(); utime()", dirname)
-        os.mkdir(dirname, mode)
-        self.chown(dirname, uid, gid)
-        os.utime(dirname, (atime, mtime))
+        self.logger.info("mkdir %r", dirname)
+        try:
+            os.mkdir(dirname, mode)
+        except OSError as exc:
+            msg = "Could not create directory '{}': {}".format(dirname, exc)
+            self.logger.warning(msg)
+            return [msg]
+        err = self.chown(dirname, uid, gid)
+        err.extend(self.utime(dirname, atime, mtime))
+        return err
+
+    def symlink(self, lnk_target, file_path):
+        self.logger.info("symlink %r %r", lnk_target, file_path)
+        try:
+            os.symlink(lnk_target, file_path)
+            return []
+        except OSError as exc:
+            msg = "Could not create symlink from '{}' to '{}': {}".format(lnk_target, file_path, exc)
+            self.logger.warning(msg)
+            return [msg]
+
+    def create_empty(self, name, perms, uid, gid):
+        try:
+            with open(name, "w") as fp:
+                os.fchmod(fp.fileno(), perms)
+                os.fchown(fp.fileno(), uid, gid)
+            return []
+        except IOError as exc:
+            msg = "Could not create (empty) file '{}': {}".format(name, exc)
+            self.logger.warning(msg)
+            return [msg]
+        except OSError as exc:
+            msg = "Could not set permissions of new empty file '{}': {}".format(name, exc)
+            self.logger.warning(msg)
+            return [msg]
+
+    def utime(self, name, atime, mtime):
+        self.logger.debug("utime %r %r %r", name, atime, mtime)
+        try:
+            os.utime(name, (atime, mtime))
+            return []
+        except OSError as exc:
+            msg = "Could not set timestamp on '{}': {}".format(name, exc)
+            self.logger.warning(msg)
+            return [msg]
 
     def validate_tree_structure(self, tree):
         """
@@ -780,7 +827,7 @@ def handle_oserror(exc):
         # play it safe: do not delete something on the server side just
         # because we cannot read it on the client
         return dict(cmd="ignore", name=exc.filename)
-    raise
+    raise exc
 
 
 def hash_file(filename, algorithm="sha256", chunk_size=4096):
