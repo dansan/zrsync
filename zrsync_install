@@ -5,29 +5,39 @@ ZRSYNC_DIR="$HOME/.zrsync/zrsync"
 VIRTENV_DIR="$HOME/.zrsync/virtenv"
 SCRIPT_DIR="$HOME/bin"
 
-DISTRO=$(lsb_release -is)
+if [[ -e /etc/os-release ]]; then
+	DISTRO=$(grep ID /etc/os-release | cut -f 2 -d =)
+else
+	if [[ -n "$(which lsb_release)" ]]; then
+		DISTRO=$(lsb_release -is)
+	fi
+fi
 
-if [ "$DISTRO" = "Debian" ]; then
+if [[ "$DISTRO" = "Debian" ]]; then
 	PACKAGES="git virtualenv librsync1 libzmq3-dev"
 	INST_EXE=/usr/bin/apt-get
 	INST_CMD=install
-elif [ "$DISTRO" = "Univention" ]; then
+elif [[ "$DISTRO" = "Univention" ]]; then
 	PACKAGES="git python-virtualenv librsync1 libzmq-dev"
 	INST_EXE=/usr/sbin/univention-install
 	INST_CMD=""
+elif [[ "$DISTRO" = "gentoo" ]]; then
+	# TODO
+	echo "NotImplementedYet"
+	exit 1
 else
 	echo "Don't know distribution, exiting."
 	exit 1
 fi
 
-if ! [ -x "$INST_EXE" ]; then
+if ! [[ -x "$INST_EXE" ]]; then
 	echo "Cannot find or run package manager \"$INST_EXE\", exiting."
 	exit 1
 fi
 
 echo "Checking package dependencies..."
 declare -a INST_PCK=()
-if [ "$DISTRO" = "Debian" -o "$DISTRO" = "Univention" ]; then
+if [[ "$DISTRO" = "Debian" -o "$DISTRO" = "Univention" ]]; then
 	# use "dpkg-query -l" to check installation state
 	for PCK in ${PACKAGES}; do
 		if ! dpkg-query -l ${PCK} >/dev/null 2>&1; then
@@ -36,8 +46,8 @@ if [ "$DISTRO" = "Debian" -o "$DISTRO" = "Univention" ]; then
 	done
 fi
 
-if [ -n "$INST_PCK" ]; then
-	if [ "$UID" = "0" ]; then
+if [[ -n "$INST_PCK" ]]; then
+	if [[ "$UID" = "0" ]]; then
 		DO_SUDO=""
 	else
 		echo "You are not root, trying with sudo..."
@@ -61,15 +71,14 @@ virtualenv ${VIRTENV_DIR} || exit 1
 cd -
 rmdir ${TMP_DIR}
 
-if [ "$DISTRO" = "Univention" ]; then
-	# create symlink python2.7 -> python
-	ln -s python ${VIRTENV_DIR}/bin/python2.7
+if [[ "$DISTRO" = "Univention" ]]; then
+	ln -s python ${VIRTENV_DIR}/bin/python3
 fi
 
 source ${VIRTENV_DIR}/bin/activate || exit 1
 
 echo "Updating pip..."
-if [ "$DISTRO" = "Univention" ]; then
+if [[ "$DISTRO" = "Univention" ]]; then
 	# ancient pip version
 	pip install -U 'https://pypi.python.org/packages/e7/a8/7556133689add8d1a54c0b14aeff0acb03c64707ce100ecd53934da1aa13/pip-8.1.2.tar.gz#md5=87083c0b9867963b29f7aba3613e8f4a' || exit 1
 fi
