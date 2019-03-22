@@ -28,7 +28,7 @@ import signal
 import stat
 import sys
 import zlib
-from StringIO import StringIO
+from io import StringIO
 from multiprocessing import Process
 from shutil import rmtree
 from tempfile import mkstemp
@@ -58,7 +58,7 @@ class MessageFormatError(ZRsyncException):
         super(MessageFormatError, self).__init__(msg, *args, **kwargs)
 
 
-class ZRequest(collections.MutableMapping):
+class ZRequest(collections.abc.MutableMapping):
     def __init__(self, cmd, name, logger, encode_data=True, **kwargs):
         self.logger = logger
         self._request = dict(cmd=cmd, name=name, status=0)
@@ -96,7 +96,7 @@ class ZRequest(collections.MutableMapping):
     def add_diff(self, signature, filename=None):
         if not filename:
             filename = self.name
-        with open(filename, "rb") as fp:
+        with open(filename, "r") as fp:
             delta = librsync.delta(fp, signature)
             # TODO: chunk big diffs
             self["data"] = delta.read()
@@ -105,7 +105,7 @@ class ZRequest(collections.MutableMapping):
     def add_full(self, filename=None):
         if not filename:
             filename = self.name
-        with open(filename, "rb") as fp:
+        with open(filename, "r") as fp:
             # TODO: chunk big files
             self.update({
                 "cmd": "full",
@@ -205,7 +205,7 @@ class ZRequest(collections.MutableMapping):
 
     def is_valid(self):
         if not all([isinstance(self.status, int) and (self.status == 0 or self.get("reason")),
-                    isinstance(self.cmd, basestring), isinstance(self.name, basestring)]):
+                    isinstance(self.cmd, str), isinstance(self.name, str)]):
             return False
         if self.cmd == "patch":
             if self.status == 0 and not (self.get("result") == "done" or all([self.get(x) for x in ["data", "parent_atime", "parent_mtime"]])):
@@ -229,7 +229,7 @@ class ZRequest(collections.MutableMapping):
             pass
         try:
             src_tree = req_.pop("src_tree")
-            if isinstance(src_tree, basestring):
+            if isinstance(src_tree, str):
                 print("type(src_tree)=%r" % src_tree)
                 print(src_tree)
                 src_tree = json.loads(src_tree)
@@ -421,16 +421,16 @@ class SyncServer(ZRsyncBase):
 
     @staticmethod
     def get_signature(filename):
-        with open(filename, "rb") as dst:
+        with open(filename, "r") as dst:
             return librsync.signature(dst)
 
     @staticmethod
     def patch(filename, delta):
-        with open(filename, "rb") as dst:
+        with open(filename, "r") as dst:
             o = None
             try:
                 fd, tmp_filename = mkstemp(dir=os.path.dirname(filename))
-                o = librsync.patch(dst, delta, os.fdopen(fd, "wb"))
+                o = librsync.patch(dst, delta, os.fdopen(fd, "w"))
             finally:
                 if o:
                     o.close()
@@ -688,7 +688,7 @@ class SyncServer(ZRsyncBase):
 
         def validate_node(_node):
             try:
-                if not isinstance(_node["cmd"], basestring) or not isinstance(_node["name"], basestring):
+                if not isinstance(_node["cmd"], str) or not isinstance(_node["name"], str):
                     return False, "Bad src_tree _node {}. Item 'cmd' or 'name' has wrong type.".format(_node)
                 if _node["cmd"] != "ignore":
                     if (not all([isinstance(_node[x], int) for x in ["st_mode", "st_uid", "st_gid", "st_size"]]) or
@@ -725,7 +725,7 @@ class SyncServer(ZRsyncBase):
 
             reply = ZRequest(logger=self.logger, cmd=cmd, name=name)
 
-            if cmd is None or not isinstance(cmd, basestring):
+            if cmd is None or not isinstance(cmd, str):
                 reply.update({"status": 1, "reason": "No or bad command."})
             elif cmd == "shutdown":
                 self.logger.info("Received request to shutdown.")
@@ -748,7 +748,7 @@ class SyncServer(ZRsyncBase):
                     self.logger.error("Invalid src_tree received: %s", reason)
                     reply.update({"status": 2, "reason": reason})
             elif cmd == "full":
-                with open(name, "wb") as fp:
+                with open(name, "w") as fp:
                     fp.write(request["data"])
                 reply.update(self.post_file_write_action(request))
             elif cmd == "mkdir":
@@ -759,7 +759,7 @@ class SyncServer(ZRsyncBase):
                 os.rmdir(request["name"])
                 reply["result"] = "done"
             elif cmd == "truncate":
-                with open(name, "wb") as fp:
+                with open(name, "w") as fp:
                     fp.truncate(0)
                 os.utime(name, (request["st_atime"], request["st_mtime"]))
                 reply["result"] = "done"
@@ -797,7 +797,7 @@ class SyncServer(ZRsyncBase):
         os.utime(parent_dir, (request["parent_atime"], request["parent_mtime"]))
         if tmp_st.st_size != request["st_size"] or tmp_st.st_blocks != request["st_blocks"]:
             # not necessarily an error, as we don't support sparse files
-            self.logger.warn("file size / block size do not the same (source: %d/%d target: %d/%d).",
+            self.logger.warning("file size / block size do not the same (source: %d/%d target: %d/%d).",
                              request["st_size"], request["st_blocks"], tmp_st.st_size, tmp_st.st_blocks)
         if hash_file(request.name) == request["sha256"]:
             return {"result": "done"}
@@ -844,7 +844,7 @@ def hash_file(filename, algorithm="sha256", chunk_size=4096):
     except AttributeError:
         # no try-except. if this fails, raise
         hash_func = hashlib.new(algorithm)
-    with open(filename, "rb") as fp:
+    with open(filename, "r") as fp:
         while True:
             chunk = fp.read(chunk_size)
             if not chunk:

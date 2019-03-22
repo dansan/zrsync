@@ -95,11 +95,11 @@ echo "Creating startup scripts in $SCRIPT_DIR..."
 mkdir -pv "$SCRIPT_DIR"
 cat <<-EOF >"$SCRIPT_DIR/zrsync"
 #!/bin/sh
-exec ${VIRTENV_DIR}/bin/python2.7 ${ZRSYNC_DIR}/zrsync/zrsync.py \$@
+exec ${VIRTENV_DIR}/bin/python3 ${ZRSYNC_DIR}/zrsync/zrsync.py \$@
 EOF
 cat <<-EOF >"$SCRIPT_DIR/zrsyncd"
 #!/bin/sh
-exec ${VIRTENV_DIR}/bin/python2.7 ${ZRSYNC_DIR}/zrsync/zrsyncd.py \$@
+exec ${VIRTENV_DIR}/bin/python3 ${ZRSYNC_DIR}/zrsync/zrsyncd.py \$@
 EOF
 chmod +x "$SCRIPT_DIR/zrsync" "$SCRIPT_DIR/zrsyncd"
 

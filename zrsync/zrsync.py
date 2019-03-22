@@ -33,7 +33,8 @@ import os
 import signal
 import stat
 import sys
-from StringIO import StringIO
+from functools import reduce
+from io import StringIO
 from multiprocessing import Process
 
 import inotify.adapters
