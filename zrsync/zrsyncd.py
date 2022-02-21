@@ -88,10 +88,7 @@ class ZRequest(collections.abc.MutableMapping):
                                                                  pprint.pformat(self.shorten_data(self)))
 
     def __setitem__(self, key, value):
-        if key == "data":
-            self._request[key] = self.encode_binary(value)
-        else:
-            self._request[key] = value
+        self._request[key] = self.encode_binary(value) if key == "data" else value
 
     def add_diff(self, signature, filename=None):
         if not filename:
@@ -198,17 +195,31 @@ class ZRequest(collections.abc.MutableMapping):
     def has_same_stat(self, other):
         if not other:
             return False
-        for key in ["st_mode", "st_uid", "st_gid", "st_size", "st_atime", "st_mtime", "st_blocks"]:
-            if self[key] != other[key]:
-                return False
-        return True
+        return all(
+            self[key] == other[key]
+            for key in [
+                "st_mode",
+                "st_uid",
+                "st_gid",
+                "st_size",
+                "st_atime",
+                "st_mtime",
+                "st_blocks",
+            ]
+        )
 
     def is_valid(self):
         if not all([isinstance(self.status, int) and (self.status == 0 or self.get("reason")),
                     isinstance(self.cmd, str), isinstance(self.name, str)]):
             return False
         if self.cmd == "patch":
-            if self.status == 0 and not (self.get("result") == "done" or all([self.get(x) for x in ["data", "parent_atime", "parent_mtime"]])):
+            if (
+                self.status == 0
+                and self.get("result") != "done"
+                and not all(
+                    self.get(x) for x in ["data", "parent_atime", "parent_mtime"]
+                )
+            ):
                 return False
         elif self.cmd == "sync_dir":
             if not (isinstance(self.get("tree_diff"), list) or
@@ -344,10 +355,7 @@ class ZRsyncBase(object):
                              request.get("result") or request.get("from", ""), *request.size)
             self.logger.debug("Received %s", request)
         except TypeError as exc:
-            if isinstance(message, dict):
-                msg = ZRequest.shorten_data(message)
-            else:
-                msg = message
+            msg = ZRequest.shorten_data(message) if isinstance(message, dict) else message
             raise MessageFormatError("Request has bad format: {}".format(exc), exception=exc, ori_message=msg)
         return request
 
@@ -396,9 +404,8 @@ class ZRsyncBase(object):
             )
             if stat.S_ISLNK(res["st_mode"]):
                 res["lnk_target"] = os.readlink(path)
-            else:
-                if hash_it:
-                    res["sha256"] = hash_file(path)
+            elif hash_it:
+                res["sha256"] = hash_file(path)
             if parent_times:
                 p_stat = os.lstat(os.path.dirname(os.path.normpath(path)))
                 res["parent_atime"] = p_stat.st_atime
@@ -445,7 +452,7 @@ class SyncServer(ZRsyncBase):
         :return: list: of dicts (results of cmp_node())
         """
         self.logger.debug("sync_tree %r", src_tree["me"]["name"])
-        self.diff_tree = dict()
+        self.diff_tree = {}
 
         # purge files/dirs not in source
         self.logger.debug("deleting files (%r)...", src_tree["me"]["name"])
@@ -465,21 +472,20 @@ class SyncServer(ZRsyncBase):
 
         # walk src_tree, collect requests
         self.logger.debug("creating / modifying files (%r)...", src_tree["me"]["name"])
-        requests = list()
+        requests = []
         my_nodes = [src_tree["me"]]
         my_nodes.extend(src_tree["files"])
         for node in my_nodes:
             if node["cmd"] == "ignore":
                 self.logger.debug("Ignoring %r (cmd=ignore).", node["name"])
                 continue
-            res = self.cmp_node(node)
-            if res:
+            if res := self.cmp_node(node):
                 requests.append(res)
         for adir in src_tree["dirs"]:
             requests.extend(self.sync_tree(adir, no_delete))
-            if not adir["me"]["cmd"] == "ignore":
+            if adir["me"]["cmd"] != "ignore":
                 os.utime(adir["me"]["name"], (adir["me"]["st_atime"], adir["me"]["st_mtime"]))
-        if not src_tree["me"]["cmd"] == "ignore":
+        if src_tree["me"]["cmd"] != "ignore":
             os.utime(src_tree["me"]["name"], (src_tree["me"]["st_atime"], src_tree["me"]["st_mtime"]))
 
         self.logger.debug("done (%r).", src_tree["me"]["name"])
@@ -582,26 +588,22 @@ class SyncServer(ZRsyncBase):
                             self.logger.warning("mtime difference is %d microseconds", (src_d - dst_d).microseconds)
                         if stat.S_ISDIR(node["st_mode"]):
                             warn = self.utime(file_path, node["st_atime"], node["st_mtime"])
+                        elif node["st_size"] == 0:
+                            self.logger.info("truncate %r", file_path)
+                            with open(file_path, "w") as fp:
+                                fp.truncate(0)
+                            warn = self.utime(file_path, node["st_atime"], node["st_mtime"])
+                            return dict(cmd="truncate", result="done", name=file_path, warn=warn)
+                        elif node["st_blocks"] < MIN_BLOCK_DIFF_SIZE:
+                            # not worth diffing on both ends and patching
+                            self.logger.info("req full %r", file_path)
+                            return dict(cmd="full", name=file_path)
                         else:
-                            if node["st_size"] == 0:
-                                self.logger.info("truncate %r", file_path)
-                                with open(file_path, "w") as fp:
-                                    fp.truncate(0)
-                                warn = self.utime(file_path, node["st_atime"], node["st_mtime"])
-                                return dict(cmd="truncate", result="done", name=file_path, warn=warn)
-                            elif node["st_blocks"] < MIN_BLOCK_DIFF_SIZE:
-                                # not worth diffing on both ends and patching
-                                self.logger.info("req full %r", file_path)
-                                return dict(cmd="full", name=file_path)
-                            else:
-                                self.logger.info("req diff %r", file_path)
-                                sig = self.get_signature(file_path)
-                                return dict(cmd="diff", name=file_path, data=ZRequest.encode_binary(sig.read()))
+                            self.logger.info("req diff %r", file_path)
+                            sig = self.get_signature(file_path)
+                            return dict(cmd="diff", name=file_path, data=ZRequest.encode_binary(sig.read()))
                     else:
                         raise RuntimeError("We should not be here.")
-                else:
-                    # src_st == dst_st
-                    pass
             except OSError as exc:
                 self.logger.exception("Uncaught OSError. node=%r st=%r args=%r errno=%r filename=%r message=%r "
                                       "strerror=%r -> %r", node, st, exc.args, exc.errno, exc.filename, exc.message,
@@ -690,11 +692,15 @@ class SyncServer(ZRsyncBase):
             try:
                 if not isinstance(_node["cmd"], str) or not isinstance(_node["name"], str):
                     return False, "Bad src_tree _node {}. Item 'cmd' or 'name' has wrong type.".format(_node)
-                if _node["cmd"] != "ignore":
-                    if (not all([isinstance(_node[x], int) for x in ["st_mode", "st_uid", "st_gid", "st_size"]]) or
-                            not isinstance(_node["st_mtime"], float)):
-                        return (False, "Bad src_tree _node {}. Item 'st_mode', 'st_uid', 'st_gid', 'st_mtime' or "
-                                       "'st_size' has wrong type.".format(_node))
+                if _node["cmd"] != "ignore" and (
+                    not all(
+                        isinstance(_node[x], int)
+                        for x in ["st_mode", "st_uid", "st_gid", "st_size"]
+                    )
+                    or not isinstance(_node["st_mtime"], float)
+                ):
+                    return (False, "Bad src_tree _node {}. Item 'st_mode', 'st_uid', 'st_gid', 'st_mtime' or "
+                                   "'st_size' has wrong type.".format(_node))
             except KeyError as exc:
                 return False, "Bad src_tree _node {}. KeyError: '{}'".format(tree, exc)
             return True, ""
@@ -770,9 +776,7 @@ class SyncServer(ZRsyncBase):
                 try:
                     os.remove(name)
                 except OSError as exc:
-                    if exc.errno == 2:
-                        pass
-                    else:
+                    if exc.errno != 2:
                         raise
                 reply["result"] = "done"
             elif cmd == "mv":
@@ -801,9 +805,8 @@ class SyncServer(ZRsyncBase):
                              request["st_size"], request["st_blocks"], tmp_st.st_size, tmp_st.st_blocks)
         if hash_file(request.name) == request["sha256"]:
             return {"result": "done"}
-        else:
-            self.logger.error("Checksum mismatch after patching %r.", request.name)
-            return {"status": 2, "reason": "Checksum mismatch for '{}'.".format(request.name)}
+        self.logger.error("Checksum mismatch after patching %r.", request.name)
+        return {"status": 2, "reason": "Checksum mismatch for '{}'.".format(request.name)}
 
 
 def setup_logging(log_level, pid):

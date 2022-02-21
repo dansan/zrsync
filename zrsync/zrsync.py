@@ -61,9 +61,9 @@ class SyncClient(ZRsyncBase):
         self.ssh = ssh
         self.no_delete = no_delete
         self.initial_only = initial_only
-        self._error_tmp = dict()
-        self._move_tmp = dict()
-        self._previous_stat = dict()
+        self._error_tmp = {}
+        self._move_tmp = {}
+        self._previous_stat = {}
 
     def do_connect(self):
         self._socket = self._context.socket(zmq.REQ)
@@ -162,17 +162,17 @@ class SyncClient(ZRsyncBase):
         self.logger.debug("HANDLE_EVENTS: %r", HANDLE_EVENTS)
         mask = reduce(lambda x, y: x | y, [getattr(inotify.constants, ev) for ev in HANDLE_EVENTS], 0)
         for handler in self.logger.handlers:
-            if not handler in inotify.adapters._LOGGER.handlers:
+            if handler not in inotify.adapters._LOGGER.handlers:
                 inotify.adapters._LOGGER.addHandler(handler)
                 inotify.adapters._LOGGER.setLevel(self.logger.level)
         notifyier = inotify.adapters.InotifyTree(base_dir, mask=mask)
         for event in notifyier.event_gen():
             if event is not None:
                 header, type_names, watch_path, filename = event
-                if not any([tn in HANDLE_EVENTS for tn in type_names]):
+                if all(tn not in HANDLE_EVENTS for tn in type_names):
                     self.logger.debug("ignoring event type_names=%r", type_names)
                     continue
-                if any([re.search(regex, filename) for regex in FILE_IGNORE_REGEX]):
+                if any(re.search(regex, filename) for regex in FILE_IGNORE_REGEX):
                     self.logger.debug("ignoring filename=%r", filename)
                     continue
                 self.logger.debug("WD=(%d) MASK=(%d) COOKIE=(%d) LEN=(%d) MASK->NAMES=%s WATCH-PATH=[%s] FILENAME=[%s]",
@@ -208,8 +208,8 @@ class SyncClient(ZRsyncBase):
                     self.logger.debug("File %r vanished, ignoring.", local_filename)
                     return True
 
-        if "IN_ISDIR" in action:
-            if "IN_CREATE" in action:
+        if "IN_CREATE" in action:
+            if "IN_ISDIR" in action:
                 # This should be just a newly created, _empty_ directory, but
                 # inotify fails to add watches for newly created directories
                 # fast enough to catch for example 'mkdir -p'.
@@ -220,73 +220,18 @@ class SyncClient(ZRsyncBase):
                     return False
                 else:
                     request["cmd"] = "mkdir"
-            elif "IN_DELETE" in action:
-                if self.no_delete:
-                    self.logger.debug("Not deleting %r: no_delete is set.", local_filename)
-                    return True
-                else:
-                    request["cmd"] = "rmdir"
-        else:
-            if "IN_CREATE" in action:
+            else:
                 self._previous_stat = request.copy()
                 if request["st_size"] == 0:
                     request["cmd"] = "truncate"
                 else:
                     request.add_full(local_filename).add_parent_time(local_filename).add_hash(local_filename)
-            elif "IN_ATTRIB" in action:
-                # prevent unnecessary request by detecting IN_ATTRIB following
-                # IN_CREATE and IN_CLOSE_WRITE without stat change
-                if request.has_same_stat(self._previous_stat):
-                    return True
-                else:
-                    self.logger.debug("***** IN_ATTRIB in action: request.has_same_stat(self._previous_stat) = False")
-                    self.logger.debug("***** request.to_dict()=%r", request.to_dict())
-                    self.logger.debug("***** self._previous_stat=%r", self._previous_stat)
-                    self._previous_stat = request.copy()
-                    request["cmd"] = "touch"
-            elif "IN_CLOSE_WRITE" in action:
-                # prevent unnecessary request in case of an empty file
-                if request.has_same_stat(self._previous_stat):
-                    self.logger.debug("***** IN_CLOSE_WRITE in action:  request.has_same_stat(self._previous_stat) = True")
-                    return True
-                if request["st_size"] == 0:
-                    if request.has_same_stat(self._previous_stat):
-                        self.logger.debug("***** IN_CLOSE_WRITE in action: [st_size] = 0 AND request.has_same_stat(self._previous_stat) = True")
-                        return True
-                    else:
-                        self.logger.debug("***** IN_CLOSE_WRITE in action: [st_size] = 0 AND request.has_same_stat(self._previous_stat) = False")
-                        self.logger.debug("***** request.to_dict()=%r", request.to_dict())
-                        self.logger.debug("***** self._previous_stat=%r", self._previous_stat)
-                        self._previous_stat = request.copy()
-                        request["cmd"] = "truncate"
-                elif request["st_blocks"] < MIN_BLOCK_DIFF_SIZE:
-                    request.add_full(local_filename).request.add_parent_time(local_filename).add_hash(local_filename)
-                else:
-                    request["cmd"] = "sig"
-            elif "IN_DELETE" in action:
-                if self.no_delete:
-                    self.logger.debug("Not deleting %r: no_delete is set.", local_filename)
-                    return True
-                else:
-                    request["cmd"] = "rm"
-            elif "IN_MOVED_FROM" in action:
-                if request.cmd == "rm":
-                    # file was moved away, noticed by request.add_stat() above
-                    pass
-                else:
-                    self._move_tmp[cookie] = remote_filename
-                    return True
-            elif "IN_MOVED_TO" in action:
-                mv_src = self._move_tmp.pop("cookie", None)
-                if mv_src:
-                    request.update({
-                        "cmd": "mv",
-                        "from": mv_src
-                    })
-                else:
-                    # moved in from outside of inotify-observed tree
-                    request.add_full(local_filename).add_parent_time(local_filename).add_hash(local_filename)
-
+        elif "IN_DELETE" in action:
+            if self.no_delete:
+                self.logger.debug("Not deleting %r: no_delete is set.", local_filename)
+                return True
+            else:
+                request["cmd"] = "rmdir"
         if request.cmd == "none":
             raise RuntimeError("request.cmd was not set with action='{}' path='{}' filename='{}' cookie='{}'.".format(action, path, filename, cookie))
 
@@ -454,7 +399,7 @@ def main(args):
         log_level=args["log_level"]
     )
     jobs = zip(args["<source-dir>"], args["<target-dir>"])
-    processes = list()
+    processes = []
     for src, trg in jobs:
         p_name = "zrsync client {}".format(src)
         kwargs.update(dict(
